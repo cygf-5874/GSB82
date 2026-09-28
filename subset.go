@@ -96,8 +96,17 @@ func (d *DFA) String() string {
 // the order in which the construction first reaches them. The result never
 // shares memory with n, and n is not modified.
 func ToDFA(n *NFA) *DFA {
+	if n == nil {
+		return &DFA{
+			NumStates: 1,
+			Start:     0,
+			Alphabet:  []string{},
+			Trans:     [][]int{{}},
+			Accept:    []int{},
+		}
+	}
+
 	start := closure(n, startSet(n))
-	accept := containsAccept(n, start)
 
 	sets := [][]int{start}
 	index := map[string]int{key(start): 0}
@@ -126,8 +135,8 @@ func ToDFA(n *NFA) *DFA {
 	}
 
 	accepts := []int{}
-	for i := 0; i < len(sets); i++ {
-		if accept {
+	for i, set := range sets {
+		if containsAccept(n, set) {
 			accepts = append(accepts, i)
 		}
 	}
@@ -149,57 +158,69 @@ func startSet(n *NFA) []int {
 
 // closure returns the epsilon closure of a set of NFA states.
 func closure(n *NFA, set []int) []int {
-	frontier := dedupInts(set)
-	out := dedupInts(set)
-	for len(frontier) > 0 {
-		next := make([]int, 0, len(frontier))
-		for _, s := range frontier {
-			next = append(next, n.epsilonTargets(s)...)
+	if n == nil {
+		return sortedInts(set)
+	}
+	seen := make(map[int]bool)
+	queue := make([]int, 0, len(set))
+	for _, s := range set {
+		if !seen[s] {
+			seen[s] = true
+			queue = append(queue, s)
 		}
-		next = dedupInts(next)
-		if len(next) == 0 {
-			break
-		}
-		for _, v := range next {
-			if !containsInt(out, v) {
-				out = append(out, v)
+	}
+	for len(queue) > 0 {
+		s := queue[0]
+		queue = queue[1:]
+		for _, t := range n.epsilonTargets(s) {
+			if !seen[t] {
+				seen[t] = true
+				queue = append(queue, t)
 			}
 		}
-		frontier = next
 	}
+	out := make([]int, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Ints(out)
 	return out
 }
 
 // moveSet returns the states reachable from set by reading ch and then taking
 // the epsilon moves that follow the consumed character.
 func moveSet(n *NFA, set []int, ch string) []int {
-	out := []int{}
+	stepped := make(map[int]bool)
 	for _, s := range set {
-		out = append(out, n.charTargets(s, ch)...)
+		for _, t := range n.charTargets(s, ch) {
+			stepped[t] = true
+		}
 	}
-	out = dedupInts(out)
-	for _, s := range out {
-		out = append(out, n.epsilonTargets(s)...)
+	if len(stepped) == 0 {
+		return nil
 	}
-	return dedupInts(out)
+	next := make([]int, 0, len(stepped))
+	for s := range stepped {
+		next = append(next, s)
+	}
+	return closure(n, next)
 }
 
 // key renders a subset of NFA states.
 func key(set []int) string {
-	return fmt.Sprint(set)
+	return fmt.Sprint(sortedInts(set))
 }
 
 // alphabetOf returns the input characters the construction has to handle.
 func alphabetOf(n *NFA) []string {
-	seen := map[string]bool{}
-	for _, e := range n.EdgeList() {
-		if e.Cond == Epsilon {
-			continue
+	if n == nil {
+		return []string{}
+	}
+	seen := make(map[string]bool)
+	for _, e := range n.Edges {
+		if e.Cond != Epsilon {
+			seen[e.Cond] = true
 		}
-		if !onAcceptingPath(n, e.From) {
-			continue
-		}
-		seen[e.Cond] = true
 	}
 	out := make([]string, 0, len(seen))
 	for c := range seen {
@@ -209,56 +230,24 @@ func alphabetOf(n *NFA) []string {
 	return out
 }
 
-// onAcceptingPath reports whether the state id can reach an accepting state.
-func onAcceptingPath(n *NFA, id int) bool {
-	if n == nil {
-		return false
-	}
-	seen := map[int]bool{id: true}
-	queue := []int{id}
-	for len(queue) > 0 {
-		s := queue[0]
-		queue = queue[1:]
-		if n.IsAccept(s) {
-			return true
-		}
-		for _, e := range n.Edges {
-			if e.From == s && !seen[e.To] {
-				seen[e.To] = true
-				queue = append(queue, e.To)
-			}
-		}
-	}
-	return false
-}
-
-// containsAccept reports whether set holds an accepting NFA state.
-func containsAccept(n *NFA, set []int) bool {
-	for _, s := range set {
-		if n.IsAccept(s) {
-			return true
-		}
-	}
-	return false
-}
-
-// dedupInts removes duplicate values from in.
-func dedupInts(in []int) []int {
-	seen := make(map[int]bool, len(in))
-	for _, v := range in {
+// sortedInts returns set in ascending order without duplicates.
+func sortedInts(set []int) []int {
+	seen := make(map[int]bool, len(set))
+	for _, v := range set {
 		seen[v] = true
 	}
 	out := make([]int, 0, len(seen))
 	for v := range seen {
 		out = append(out, v)
 	}
+	sort.Ints(out)
 	return out
 }
 
-// containsInt reports whether vs holds v.
-func containsInt(vs []int, v int) bool {
-	for _, x := range vs {
-		if x == v {
+// containsAccept reports whether set holds an accepting NFA state.
+func containsAccept(n *NFA, set []int) bool {
+	for _, s := range set {
+		if n.IsAccept(s) {
 			return true
 		}
 	}
